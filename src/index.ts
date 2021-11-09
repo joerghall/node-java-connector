@@ -8,7 +8,7 @@ import { getExecutable } from "./helperFunctions";
 
 const path = require('path');
 const fs = require('fs');
-const tmpCrypto = require('crypto');
+// const tmpCrypto = require('crypto');
 const tmpFetch = require('node-fetch');
 const yauzl = require('yauzl');
 const tar = require('tar');
@@ -20,9 +20,9 @@ const tar = require('tar');
  * @param {string} [options.os] - Operating System (defaults to current) (`windows`/`mac`/`linux`/`solaris`/`aix`)
  * @param {string} [options.arch] - Architecture (defaults to current) (`x64`/`x32`/`ppc64`/`s390x`/`ppc64le`/`aarch64`/`sparcv9`)
  * @param {string} [options.openjdk_impl = hotspot] - OpenJDK Implementation (`hotspot`/`openj9`)
- * @param {string} [options.release = latest] - Release
- * @param {string} [options.type = jre] - Binary Type (`jre`/`jdk`)
+ * @param {string} [options.image_type = jre] - Binary Type (`jre`/`jdk`)
  * @param {string} [options.heap_size] - Heap Size (`normal`/`large`)
+ * @param {string} [options.jvm_impl] - Jvm implementation (`hotspot`/`openj9`/`dragonwell`)
  * @param {boolean} [options.allow_system_java] - Allow using system-wide java installation rather than downloading and installing a local copy (defaults to `true`)
  * @return Promise<string> - Resolves to the installation directory or rejects an error
  * @example
@@ -46,10 +46,10 @@ const tar = require('tar');
  *     // Handle the error
  *   })
  */
-export async function install(version: number = 8, options: any = {}) {
+export async function install(version: number = 11, options: any = {}) {
 
-  const { openjdk_impl = 'hotspot', release = 'latest', type = 'jre', allow_system_java = true }: any = options;
-  options = { ...options, openjdk_impl, release, type, allow_system_java }
+  const { jvm_impl = 'hotspot', image_type = 'jre', allow_system_java = true, vendor = 'eclipse', release_type='ga', heap_size='normal'}: any = options;
+  options = { ...options, jvm_impl, image_type, vendor, release_type, heap_size, allow_system_java}
 
   if (options.allow_system_java == true) {
     if (await systemJavaExists()) {
@@ -57,7 +57,9 @@ export async function install(version: number = 8, options: any = {}) {
     }
   }
 
-  let url = 'https://api.adoptopenjdk.net/v2/info/releases/openjdk' + version + '?'
+  options.version = `(${version},${version+1})`;
+
+  let url = 'https://api.adoptopenjdk.net/v3/info/release_versions?'
 
   if (!options.os) {
     switch (process.platform) {
@@ -81,10 +83,10 @@ export async function install(version: number = 8, options: any = {}) {
     }
   }
   if (!options.arch) {
-    if (/^ppc64|s390x|x32|x64$/g.test(process.arch)) options.arch = process.arch
-    else if (process.arch === 'ia32') options.arch = 'x32'
+    if (/^ppc64|s390x|x32|x64$/g.test(process.arch)) options.architecture = process.arch
+    else if (process.arch === 'ia32') options.architecture = 'x32'
     // support Apple silicon processors using Rosetta 2 as there is no arm64 (aarch64) openjdk release yet
-    else if (options.os === 'mac') options.arch = 'x64'
+    else if (options.os === 'mac') options.architecture = 'x64'
     else return Promise.reject(new Error('Unsupported architecture'))
   }
 
@@ -93,8 +95,8 @@ export async function install(version: number = 8, options: any = {}) {
 
   return tmpFetch(url)
     .then((response: { json: () => any }) => response.json())
-    .then((json: { binaries: { [x: string]: string }[] }) => downloadAll(tmpdir, json.binaries[0]['binary_link']))
-    .then(verify)
+    .then((json: { versions: [{ semver: string }]}) => downloadAll(tmpdir, json.versions[0].semver, options))
+//    .then(verify)
     .then(move)
     .then(extract)
 }
@@ -224,7 +226,7 @@ function createDir(dir: any) {
 function download(dir: any, url: RequestInfo) {
   return new Promise((resolve, reject) => {
     createDir(dir)
-      .then(() => tmpFetch(url))
+      .then(() => tmpFetch(url, { redirect: "follow"}))
       .then((response: any) => {
         const destFile = path.join(dir, path.basename(url))
         const destStream = fs.createWriteStream(destFile)
@@ -234,38 +236,40 @@ function download(dir: any, url: RequestInfo) {
   })
 }
 
-function downloadAll(dir: any, url: string) {
-  return download(dir, url + '.sha256.txt').then(() => download(dir, url))
+function downloadAll(dir: any, version: string, options: any) {
+  let url = `https://api.adoptium.net/v3/binary/version/jdk-${version}/${options.os}/${options.architecture}/${options.image_type}/${options.jvm_impl}/${options.heap_size}/${options.vendor}`
+  console.log(url);
+  return download(dir, url)
 }
 
-function genChecksum(file: any) {
-  return new Promise((resolve, reject) => {
-    fs.readFile(file, (err: any, data: any) => {
-      if (err) reject(err)
+// function genChecksum(file: any) {
+//   return new Promise((resolve, reject) => {
+//     fs.readFile(file, (err: any, data: any) => {
+//       if (err) reject(err)
+//
+//       resolve(
+//         tmpCrypto
+//           .createHash('sha256')
+//           .update(data)
+//           .digest('hex')
+//       )
+//     })
+//   })
+// }
 
-      resolve(
-        tmpCrypto
-          .createHash('sha256')
-          .update(data)
-          .digest('hex')
-      )
-    })
-  })
-}
-
-function verify(file: unknown) {
-  return new Promise((resolve, reject) => {
-    fs.readFile(file + '.sha256.txt', 'utf-8', (err: any, data: string) => {
-      if (err) reject(err)
-
-      genChecksum(file).then(checksum => {
-        checksum === data.split('  ')[0]
-          ? resolve(file)
-          : reject(new Error('File and checksum don\'t match'))
-      })
-    })
-  })
-}
+// function verify(file: unknown) {
+//   return new Promise((resolve, reject) => {
+//     fs.readFile(file + '.sha256.txt', 'utf-8', (err: any, data: string) => {
+//       if (err) reject(err)
+//
+//       genChecksum(file).then(checksum => {
+//         checksum === data.split('  ')[0]
+//           ? resolve(file)
+//           : reject(new Error('File and checksum don\'t match'))
+//       })
+//     })
+//   })
+// }
 
 function move(file: string) {
   return new Promise((resolve, reject) => {
