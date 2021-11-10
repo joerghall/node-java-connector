@@ -223,12 +223,12 @@ function createDir(dir: any) {
   })
 }
 
-function download(dir: any, url: RequestInfo) {
+function download(dir: any, url: RequestInfo, filename?: string) {
   return new Promise((resolve, reject) => {
     createDir(dir)
       .then(() => tmpFetch(url, { redirect: "follow"}))
       .then((response: any) => {
-        const destFile = path.join(dir, path.basename(url))
+        const destFile = filename ? path.join(dir, filename) : path.join(dir, path.basename(url))
         const destStream = fs.createWriteStream(destFile)
         response.body.pipe(destStream).on('finish', () => resolve(destFile))
       })
@@ -239,7 +239,7 @@ function download(dir: any, url: RequestInfo) {
 function downloadAll(dir: any, version: string, options: any) {
   let url = `https://api.adoptium.net/v3/binary/version/jdk-${version}/${options.os}/${options.architecture}/${options.image_type}/${options.jvm_impl}/${options.heap_size}/${options.vendor}`
   console.log(url);
-  return download(dir, url)
+  return download(dir, url, options.os === "windows" ? "java-download.zip" : "java-download.tgz")
 }
 
 // function genChecksum(file: any) {
